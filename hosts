@@ -1,0 +1,4 @@
+[master]
+172.17.0.9 ansible_connection=ssh ansible_ssh_port=22 ansible_ssh_user=qk365 ansible_ssh_pass=********* ansible_sudo_pass=***********
+
+[backup]

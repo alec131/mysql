@@ -1,0 +1,189 @@
+---
+- name: Install common packages
+  yum:
+    name: "{{ packages }}"
+    state: present
+  vars:
+    packages:
+    - ncurses-devel
+    - cmake
+    - bison
+    - ntpdate
+    - perl
+    - gcc-c++
+    - autoconf
+
+- name: Add mysql group
+  group:
+    name: mysql
+    state: present
+
+- name: Add mysql user
+  user:
+    name: mysql
+    create_home: no
+    shell: /sbin/nologin
+    group: mysql
+
+
+- name: Init mysql dir
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: mysql
+  with_items:
+    - "{{ mysql_dir }}/mysql"
+    - "{{ mysql_dir }}/data"
+    - "{{ mysql_dir }}/log"
+    - "{{ mysql_dir }}/mysql_redo"
+    - "{{ mysql_dir }}/binlog"
+
+- name: Init mysql log file
+  file:
+    path: "{{ mysql_dir }}/log/mysql.log"
+    state: touch
+    owner: mysql
+
+- name: Download and unarchive file for mysql 5.7
+  unarchive:
+    src: http://192.168.1.150:8080/sw/mysql/mysql-5.7.27.tar.gz
+    dest: /tmp/
+    remote_src: yes
+  when: mysql_version == "5.7"
+
+- name: Download and unarchive file for mysql 5.6
+  unarchive:
+    src: http://192.168.1.150:8080/sw/mysql/mysql-5.6.45.tar.gz
+    dest: /tmp/
+    remote_src: yes
+  when: mysql_version == "5.6"
+
+
+- name: Add mysql boost
+  file:
+    path: /tmp/mysql-5.7.27/boost/
+    state: directory
+  when: mysql_version == "5.7"
+
+
+- name: Download boost for 5.7
+  get_url:
+    url: http://192.168.1.150:8080/sw/mysql/boost_1_59_0.tar.gz
+    dest: /tmp/mysql-5.7.27/boost/
+  when: mysql_version == "5.7"
+
+- name: compile mysql 5.7
+  shell: |
+    cmake \
+    -DCMAKE_INSTALL_PREFIX="{{ mysql_dir }}"/mysql \
+    -DMYSQL_DATADIR="{{ mysql_dir }}"/data \
+    -DSYSCONFDIR=/etc \
+    -DWITH_MYISAM_STORAGE_ENGINE=1 \
+    -DWITH_INNOBASE_STORAGE_ENGINE=1 \
+    -DWITH_ARCHIVE_STORAGE_ENGINE=1 \
+    -DMYSQL_UNIX_ADDR=/tmp/mysql.sock \
+    -DMYSQL_TCP_PORT="{{ mysql_port }}" \
+    -DENABLED_LOCAL_INFILE=1 \
+    -DENABLE_DOWNLOADS=1 \
+    -DWITH_PARTITION_STORAGE_ENGINE=1 \
+    -DEXTRA_CHARSETS=all \
+    -DDEFAULT_CHARSET=utf8 \
+    -DDEFAULT_COLLATION=utf8_general_ci \
+    -DWITH_DEBUG=0 \
+    -DMYSQL_MAINTAINER_MODE=0 \
+    -DWITH_SSL:STRING=bundled \
+    -DWITH_ZLIB:STRING=bundled \
+    -DDOWNLOAD_BOOST=1 \
+    -DWITH_BOOST=boost/
+  args:
+    chdir: /tmp/mysql-5.7.27
+    creates: /tmp/mysql-5.7.27/Makefile
+  when: mysql_version == "5.7"
+
+- name: compile mysql5.6
+  shell: |
+    cmake \
+    -DCMAKE_INSTALL_PREFIX="{{ mysql_dir }}"/mysql \
+    -DMYSQL_DATADIR="{{ mysql_dir }}"/data \
+    -DSYSCONFDIR=/etc \
+    -DWITH_MYISAM_STORAGE_ENGINE=1 \
+    -DWITH_INNOBASE_STORAGE_ENGINE=1 \
+    -DWITH_ARCHIVE_STORAGE_ENGINE=1 \
+    -DMYSQL_UNIX_ADDR=/tmp/mysql.sock \
+    -DMYSQL_TCP_PORT="{{ mysql_port }}" \
+    -DENABLED_LOCAL_INFILE=1 \
+    -DENABLE_DOWNLOADS=1 \
+    -DWITH_PARTITION_STORAGE_ENGINE=1 \
+    -DEXTRA_CHARSETS=all \
+    -DDEFAULT_CHARSET=utf8 \
+    -DDEFAULT_COLLATION=utf8_general_ci \
+    -DWITH_DEBUG=0 \
+    -DMYSQL_MAINTAINER_MODE=0 \
+    -DWITH_SSL:STRING=bundled \
+    -DWITH_ZLIB:STRING=bundled \
+  args:
+    chdir: /tmp/mysql-5.6.45
+    creates: /tmp/mysql-5.6.45/Makefile
+  when: mysql_version == "5.6"
+
+- name: Install mysql5.7
+  make:
+    chdir: /tmp/mysql-5.7.27
+    target: install
+  when: mysql_version == "5.7"
+
+- name: Install mysql5.6
+  make:
+    chdir: /tmp/mysql-5.6.45
+    target: install
+  when: mysql_version == "5.6"
+
+
+- name: Init my.cnf file
+  template: 
+    src: my.cnf.j2
+    dest: /etc/my.cnf
+    backup: yes
+
+- name: Add to PATH
+  blockinfile:
+    path: /etc/profile
+    block: |
+        PATH=$PATH:"{{ mysql_dir }}"/mysql/bin
+        export PATH
+
+- name: Source profile
+  shell: |
+      source /etc/profile
+
+- name: Config mysqld service
+  shell: |
+      cp -f /tmp/mysql-5.7.27/support-files/mysql.server /etc/init.d/mysqld
+      chmod 755 /etc/init.d/mysqld
+      chkconfig mysqld on 
+  when: mysql_version == "5.7"
+
+- name: Config mysqld service 5.6
+  shell: |
+      cp -f /tmp/mysql-5.6.45/support-files/mysql.server /etc/init.d/mysqld
+      chmod 755 /etc/init.d/mysqld
+      chkconfig mysqld on 
+  when: mysql_version == "5.6"
+
+
+- name: Init database 5.7
+  shell: |
+      source /etc/profile
+      mysqld --initialize --basedir="{{ mysql_dir }}"/mysql --datadir="{{ mysql_dir }}"/data --user=mysql
+  when: mysql_version == "5.7"
+
+- name: Init database 5.6
+  shell: |
+      chmod +x /tmp/mysql-5.6.45/scripts/mysql_install_db
+      /tmp/mysql-5.6.45/scripts/mysql_install_db --basedir="{{ mysql_dir }}"/mysql --datadir="{{ mysql_dir }}"/data --user=mysql
+  when: mysql_version == "5.6"
+
+- name: Start mysqld
+  systemd:
+    name: mysqld
+    state: started
